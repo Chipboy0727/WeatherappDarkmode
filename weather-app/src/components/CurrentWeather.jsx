@@ -19,11 +19,12 @@
  * ─────────────────────────────────────────────────────────────────
  */
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import PropTypes from "prop-types";
 import WIcon from "./WIcon";
 import LoadingOverlay from "./LoadingOverlay";
 import { fmtDate, fmtAmPm } from "../utils/weather";
+import { API_KEY } from "../config";
 
 /* ══════════════════════════════════════════════════════════════════
    VIDEO SOURCES
@@ -198,12 +199,75 @@ const CurrentWeather = ({
   const [geoLoading, setGeoLoading] = useState(false);
   const [geoError, setGeoError] = useState(null);
 
+  // Autocomplete suggestions
+  const [suggestions, setSuggestions] = useState([]);
+  const [sugLoading, setSugLoading] = useState(false);
+  const debounceRef = useRef(null);
+  const searchWrapRef = useRef(null);
+
+  // Fade transition khi đổi city
+  const [fadeKey, setFadeKey] = useState(0);
+  const prevCityRef = useRef(city);
+  useEffect(() => {
+    if (city !== prevCityRef.current) {
+      setFadeKey((k) => k + 1);
+      prevCityRef.current = city;
+    }
+  }, [city]);
+
+  // Đóng suggestions khi click ngoài
+  useEffect(() => {
+    const handler = (e) => {
+      if (searchWrapRef.current && !searchWrapRef.current.contains(e.target)) {
+        setSuggestions([]);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  /** Fetch city suggestions từ OWM Geocoding API với debounce 500ms */
+  const handleInputChange = (e) => {
+    const val = e.target.value;
+    setSearchInput(val);
+    clearTimeout(debounceRef.current);
+    if (val.trim().length < 2) {
+      setSuggestions([]);
+      return;
+    }
+    setSugLoading(true);
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `https://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(val.trim())}&limit=5&appid=${API_KEY}`,
+        );
+        const data = await res.json();
+        setSuggestions(Array.isArray(data) ? data : []);
+      } catch {
+        setSuggestions([]);
+      } finally {
+        setSugLoading(false);
+      }
+    }, 500);
+  };
+
+  /** Chọn 1 suggestion từ dropdown — dùng lat/lon để tránh lỗi tên */
+  const handleSelectSuggestion = (sug) => {
+    // Dùng onGeoSearch với lat/lon thay vì tên để chính xác 100%
+    onGeoSearch(sug.lat, sug.lon);
+    setSearchInput("");
+    setSuggestions([]);
+    setShowSearch(false);
+    setGeoError(null);
+  };
+
   const handleSubmit = (e) => {
     e.preventDefault();
     const t = searchInput.trim();
     if (!t) return;
     onSearch(t);
     setSearchInput("");
+    setSuggestions([]);
     setShowSearch(false);
     setGeoError(null);
   };
@@ -334,58 +398,255 @@ const CurrentWeather = ({
       )}
 
       {showSearch && (
-        <form
-          onSubmit={handleSubmit}
-          className="search-form"
-          role="search"
-          style={{ position: "relative", zIndex: 10 }}
+        <div
+          ref={searchWrapRef}
+          style={{ position: "relative", zIndex: 20, marginBottom: 4 }}
         >
-          <input
-            type="text"
-            placeholder="Search city…"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            className="search-input"
-            autoFocus
-          />
-          <button type="submit" className="search-submit">
-            Go
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowSearch(false)}
-            className="search-close"
-          >
-            <svg
-              width="12"
-              height="12"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              strokeLinecap="round"
+          <form onSubmit={handleSubmit} className="search-form" role="search">
+            <input
+              type="text"
+              placeholder="Search city…"
+              value={searchInput}
+              onChange={handleInputChange}
+              className="search-input"
+              autoFocus
+              autoComplete="off"
+            />
+            {sugLoading && (
+              <div
+                style={{
+                  position: "absolute",
+                  right: 88,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                }}
+              >
+                <div
+                  style={{
+                    width: 12,
+                    height: 12,
+                    border: "2px solid rgba(0,198,255,0.3)",
+                    borderTopColor: "#00c6ff",
+                    borderRadius: "50%",
+                    animation: "spin 0.7s linear infinite",
+                  }}
+                />
+              </div>
+            )}
+            <button type="submit" className="search-submit">
+              Go
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowSearch(false);
+                setSuggestions([]);
+              }}
+              className="search-close"
             >
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
-        </form>
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+              >
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </form>
+
+          {/* Autocomplete dropdown */}
+          {suggestions.length > 0 && (
+            <div
+              style={{
+                position: "absolute",
+                top: "calc(100% + 4px)",
+                left: 0,
+                right: 0,
+                background: "rgba(6,12,28,0.98)",
+                border: "1px solid rgba(0,198,255,0.2)",
+                borderRadius: 12,
+                overflow: "hidden",
+                zIndex: 100,
+                boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+                animation: "slideDown 0.15s ease",
+              }}
+            >
+              {suggestions.map((sug, i) => {
+                const name = sug.local_names?.vi || sug.name;
+                const sub = [sug.state, sug.country].filter(Boolean).join(", ");
+                return (
+                  <div
+                    key={i}
+                    onClick={() => handleSelectSuggestion(sug)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "10px 14px",
+                      cursor: "pointer",
+                      borderBottom:
+                        i < suggestions.length - 1
+                          ? "1px solid rgba(255,255,255,0.05)"
+                          : "none",
+                      transition: "background 0.15s",
+                    }}
+                    onMouseEnter={(e) =>
+                      (e.currentTarget.style.background =
+                        "rgba(0,198,255,0.08)")
+                    }
+                    onMouseLeave={(e) =>
+                      (e.currentTarget.style.background = "transparent")
+                    }
+                  >
+                    <svg
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="rgba(0,198,255,0.6)"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      style={{ flexShrink: 0 }}
+                    >
+                      <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" />
+                      <circle cx="12" cy="9" r="2.5" />
+                    </svg>
+                    <div>
+                      <div
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 600,
+                          color: "#fff",
+                          fontFamily: "DM Sans,sans-serif",
+                        }}
+                      >
+                        {name}
+                      </div>
+                      {sub && (
+                        <div
+                          style={{
+                            fontSize: 10,
+                            color: "rgba(255,255,255,0.38)",
+                            fontFamily: "DM Sans,sans-serif",
+                          }}
+                        >
+                          {sub}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       )}
 
       {loading && <LoadingOverlay city={city} />}
 
+      {/* Empty state đẹp khi không tìm thấy city */}
       {error && !loading && (
         <div
-          className="error-msg"
-          role="alert"
-          style={{ position: "relative", zIndex: 10 }}
+          style={{
+            position: "relative",
+            zIndex: 10,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            flex: 1,
+            gap: 12,
+            padding: "20px 0",
+          }}
         >
-          ⚠️ {error}
+          <div
+            style={{
+              width: 56,
+              height: 56,
+              borderRadius: "50%",
+              background: "rgba(255,100,100,0.08)",
+              border: "1px solid rgba(255,100,100,0.2)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="rgba(255,100,100,0.7)"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+            >
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              <line x1="11" y1="8" x2="11" y2="12" />
+              <line x1="11" y1="15" x2="11.01" y2="15" />
+            </svg>
+          </div>
+          <div style={{ textAlign: "center" }}>
+            <div
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                color: "rgba(255,255,255,0.8)",
+                marginBottom: 4,
+                fontFamily: "DM Sans,sans-serif",
+              }}
+            >
+              City not found
+            </div>
+            <div
+              style={{
+                fontSize: 11,
+                color: "rgba(255,255,255,0.35)",
+                fontFamily: "DM Sans,sans-serif",
+              }}
+            >
+              Try searching for another city
+            </div>
+          </div>
+          <button
+            onClick={() => setShowSearch(true)}
+            style={{
+              padding: "7px 16px",
+              borderRadius: 10,
+              fontSize: 12,
+              fontWeight: 600,
+              background: "rgba(0,198,255,0.12)",
+              border: "1px solid rgba(0,198,255,0.3)",
+              color: "#00c6ff",
+              cursor: "pointer",
+              fontFamily: "DM Sans,sans-serif",
+              transition: "all 0.18s",
+            }}
+            onMouseEnter={(e) =>
+              (e.currentTarget.style.background = "rgba(0,198,255,0.2)")
+            }
+            onMouseLeave={(e) =>
+              (e.currentTarget.style.background = "rgba(0,198,255,0.12)")
+            }
+          >
+            Try again
+          </button>
         </div>
       )}
 
       {weather && !loading && (
-        <>
+        <div
+          key={fadeKey}
+          style={{
+            display: "contents",
+            animation: "fadeSlide 0.35s ease both",
+          }}
+        >
           <div
             className="weather-icon-wrap"
             style={{ position: "relative", zIndex: 10 }}
@@ -502,7 +763,7 @@ const CurrentWeather = ({
               </div>
             )}
           </div>
-        </>
+        </div>
       )}
     </section>
   );

@@ -229,51 +229,45 @@ const WeatherMap = ({
     [],
   );
 
-  // ── Fetch real nearby cities from OWM ──────────────────────────────────────
+  // ── Fetch thời tiết thực cho 2 thành phố cố định ─────────────────────────
   useEffect(() => {
-    if (!lat || !lon || !apiKey) return;
+    if (!apiKey) return;
     setNearbyCities([]);
 
     const controller = new AbortController();
-    fetch(
-      `https://api.openweathermap.org/data/2.5/find?lat=${lat}&lon=${lon}&cnt=8&units=metric&appid=${apiKey}`,
-      { signal: controller.signal },
+    const { signal } = controller;
+
+    const FIXED_CITIES = ["Thanh Hoa", "Nam Dinh"];
+
+    Promise.all(
+      FIXED_CITIES.map((name) =>
+        fetch(
+          `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(name)},VN&units=metric&appid=${apiKey}`,
+          { signal },
+        ).then((r) => r.json()),
+      ),
     )
-      .then((r) => r.json())
-      .then((data) => {
-        if (!data?.list) return;
-        const mainName = (cityName?.split(",")[0] || "").toLowerCase();
-        const filtered = data.list
-          .filter(
-            (c) =>
-              c.name.toLowerCase() !== mainName &&
-              (Math.abs(c.coord.lat - lat) > 0.1 ||
-                Math.abs(c.coord.lon - lon) > 0.1),
-          )
-          .slice(0, 2)
-          .map((c) => ({
-            name: c.name,
-            country: c.sys?.country || "—",
-            lat: c.coord.lat,
-            lon: c.coord.lon,
-            temp: Math.round(c.main.temp),
-            wind: Math.round(msToKmh(c.wind.speed)),
-            humidity: c.main.humidity,
-            code: c.weather[0]?.id ?? 800,
+      .then((results) => {
+        const cities = results
+          .filter((d) => d.cod === 200)
+          .map((d) => ({
+            name: d.name,
+            country: d.sys?.country || "VN",
+            lat: d.coord.lat,
+            lon: d.coord.lon,
+            temp: Math.round(d.main.temp),
+            wind: Math.round(msToKmh(d.wind.speed)),
+            humidity: d.main.humidity,
+            code: d.weather[0]?.id ?? 800,
           }));
-        setNearbyCities(filtered.length >= 2 ? filtered : []);
+        setNearbyCities(cities.length >= 2 ? cities : []);
       })
       .catch((err) => {
         if (err.name !== "AbortError") setNearbyCities([]);
       });
 
     return () => controller.abort();
-    /*
-     * cityName is intentionally excluded: the city label is derived from
-     * lat/lon. Re-fetching on every cityName string change would cause
-     * duplicate requests when the parent updates both together.
-     */
-  }, [lat, lon, apiKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [apiKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Pan + redraw markers when city changes ─────────────────────────────────
   useEffect(() => {

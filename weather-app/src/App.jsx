@@ -57,15 +57,26 @@ const convertTemp = (c, unit) => {
 ══════════════════════════════════════════════════════════════════════════════ */
 export default function App() {
   // ── Feature state ─────────────────────────────────────────────────────────
-  /** Temperature unit: "C" or "F" */
-  const [unit, setUnit] = useState("C");
+  /** Temperature unit: "C" or "F" — persisted in localStorage */
+  const [unit, setUnit] = useState(
+    () => localStorage.getItem("weathry_unit") || "C",
+  );
 
   /** Night mode — applies .night-mode class to <html> */
   const [isNightMode, setIsNightMode] = useState(false);
 
   const [showSplash, setShowSplash] = useState(true);
   const [previewEffect, setPreviewEffect] = useState(null);
-  const [savedCities, setSavedCities] = useState(["Hanoi"]);
+
+  /** Saved cities — persisted in localStorage */
+  const [savedCities, setSavedCities] = useState(() => {
+    try {
+      const stored = localStorage.getItem("weathry_cities");
+      return stored ? JSON.parse(stored) : ["Hanoi"];
+    } catch {
+      return ["Hanoi"];
+    }
+  });
 
   // Map layer selector
   const MAP_LAYERS = [
@@ -93,8 +104,27 @@ export default function App() {
     document.documentElement.classList.toggle("night-mode", isNightMode);
   }, [isNightMode]);
 
+  // Persist unit to localStorage
+  useEffect(() => {
+    localStorage.setItem("weathry_unit", unit);
+  }, [unit]);
+
+  // Persist savedCities to localStorage
+  useEffect(() => {
+    localStorage.setItem("weathry_cities", JSON.stringify(savedCities));
+  }, [savedCities]);
+
   // ── Weather data ───────────────────────────────────────────────────────────
-  const [city, setCity] = useState("Hanoi");
+  const [city, setCity] = useState(() => {
+    try {
+      const stored = localStorage.getItem("weathry_cities");
+      const cities = stored ? JSON.parse(stored) : null;
+      return cities?.[0] || "Hanoi";
+    } catch {
+      return "Hanoi";
+    }
+  });
+  const [geoStatus, setGeoStatus] = useState("idle"); // idle | detecting | done | denied
 
   const {
     weather,
@@ -209,6 +239,35 @@ export default function App() {
     [fetchWeather],
   );
 
+  // ── Auto geolocation on first load ────────────────────────────────────────
+  useEffect(() => {
+    // Chỉ detect nếu user chưa có saved city
+    const hasSaved = (() => {
+      try {
+        const s = localStorage.getItem("weathry_cities");
+        return s && JSON.parse(s).length > 0;
+      } catch {
+        return false;
+      }
+    })();
+    if (hasSaved) return; // đã có city từ trước → dùng luôn
+
+    if (!navigator.geolocation) return;
+    setGeoStatus("detecting");
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setGeoStatus("done");
+        handleGeoSearch(pos.coords.latitude, pos.coords.longitude);
+      },
+      () => {
+        setGeoStatus("denied");
+        // fallback Hanoi nếu bị từ chối
+        fetchWeather("Hanoi");
+      },
+      { timeout: 6000 },
+    );
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   /* ════════════════════════════════════════════════════════════════════════════
      RENDER
   ════════════════════════════════════════════════════════════════════════════ */
@@ -236,6 +295,43 @@ export default function App() {
         />
 
         <main className="main-content">
+          {/* Geo detecting banner */}
+          {geoStatus === "detecting" && (
+            <div
+              style={{
+                position: "fixed",
+                top: 12,
+                left: "50%",
+                transform: "translateX(-50%)",
+                zIndex: 9999,
+                background: "rgba(0,198,255,0.15)",
+                border: "1px solid rgba(0,198,255,0.35)",
+                borderRadius: 12,
+                padding: "8px 18px",
+                fontSize: 12,
+                color: "#00c6ff",
+                fontFamily: "DM Sans,sans-serif",
+                backdropFilter: "blur(12px)",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
+              }}
+            >
+              <div
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: "50%",
+                  border: "2px solid rgba(0,198,255,0.3)",
+                  borderTopColor: "#00c6ff",
+                  animation: "spin 0.7s linear infinite",
+                }}
+              />
+              Detecting your location…
+            </div>
+          )}
+
           {/* [R1,C1] */}
           <ErrorBoundary>
             <CurrentWeather
@@ -252,6 +348,8 @@ export default function App() {
               unit={unitLabel}
               onSearch={handleSearch}
               onGeoSearch={handleGeoSearch}
+              unitRaw={unit}
+              onUnitChange={setUnit}
             />
           </ErrorBoundary>
 
